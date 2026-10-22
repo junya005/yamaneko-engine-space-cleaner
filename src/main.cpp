@@ -6,6 +6,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -13,48 +16,55 @@
 namespace Engine {
 	struct Vertex {
 		glm::vec3 position;
-		glm::vec3 texCoord;
+		glm::vec3 normal;
+		glm::vec2 tex_coords;
+	};
+
+	struct Texture {
+		unsigned int id;
+		std::string type;
+		std::string path;
 	};
 
 	struct Transform {
 	public:
-			glm::vec3 position;
-			glm::vec3 rotation; // ラジアン単位
-			glm::vec3 scale;
-			Transform() : position(0.0f, 0.0f, 0.0f), rotation(0.0f, 0.0f, 0.0f), scale(1.0f, 1.0f, 1.0f) {}
+		glm::vec3 position;
+		glm::vec3 rotation; // ラジアン単位
+		glm::vec3 scale;
+		Transform() : position(0.0f, 0.0f, 0.0f), rotation(0.0f, 0.0f, 0.0f), scale(1.0f, 1.0f, 1.0f) {}
 
-			glm::mat4 GetRotationMatrix() const {
-				glm::mat4 rot = glm::mat4(1.0f);
-				rot = glm::rotate(rot, rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
-				rot = glm::rotate(rot, rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
-				rot = glm::rotate(rot, rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
-				return rot;
-			}
+		glm::mat4 GetRotationMatrix() const {
+			glm::mat4 rot = glm::mat4(1.0f);
+			rot = glm::rotate(rot, rotation.y, glm::vec3(0.0f, 1.0f, 0.0f));
+			rot = glm::rotate(rot, rotation.x, glm::vec3(1.0f, 0.0f, 0.0f));
+			rot = glm::rotate(rot, rotation.z, glm::vec3(0.0f, 0.0f, 1.0f));
+			return rot;
+		}
 
-			glm::vec3 GetForwardVector() const {
-				return glm::vec3(GetRotationMatrix() * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
-			}
+		glm::vec3 GetForwardVector() const {
+			return glm::vec3(GetRotationMatrix() * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
+		}
 
-			glm::vec3 GetUpVector() const {
-				return glm::vec3(GetRotationMatrix() * glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
-			}
+		glm::vec3 GetUpVector() const {
+			return glm::vec3(GetRotationMatrix() * glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
+		}
 
-			glm::vec3 GetRightVector() const {
-				return glm::vec3(GetRotationMatrix() * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
-			}
+		glm::vec3 GetRightVector() const {
+			return glm::vec3(GetRotationMatrix() * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+		}
 
-			glm::mat4 GetModelMatrix() const {
-				glm::mat4 model = glm::mat4(1.0f);
-				model = glm::translate(model, position);
-				model = model * GetRotationMatrix();
-				model = glm::scale(model, scale);
-				return model;
-			}
+		glm::mat4 GetModelMatrix() const {
+			glm::mat4 model = glm::mat4(1.0f);
+			model = glm::translate(model, position);
+			model = model * GetRotationMatrix();
+			model = glm::scale(model, scale);
+			return model;
+		}
 
 	};
 
 	// ファイルを文字列でロードする関数
-	inline std::string LoadFileToString(const std::string& filePath){
+	inline std::string LoadFileToString(const std::string& filePath) {
 		std::ifstream file(filePath);
 		if (!file.is_open()) {
 			return "";
@@ -69,11 +79,11 @@ namespace Engine {
 	}
 
 	// 毎回 / 1000.0f するのは面倒なので、秒単位で取得する関数を用意
-	inline float GetTime(){
+	inline float GetTime() {
 		return SDL_GetTicks() / 1000.0f;
 	}
 
-	inline glm::vec2 GetMouseMotion(){
+	inline glm::vec2 GetMouseMotion() {
 		int x, y;
 		SDL_GetRelativeMouseState(&x, &y);
 		return glm::vec2(x, y);
@@ -102,7 +112,7 @@ namespace Engine {
 		const char* vertexShaderSourceCStr = vertexShaderSource.c_str();
 		glShaderSource(vertexShader, 1, &vertexShaderSourceCStr, NULL);
 		glCompileShader(vertexShader);
-	
+
 		int  success;
 		char infoLog[512];
 		glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &success);
@@ -136,7 +146,7 @@ namespace Engine {
 
 		glGetProgramiv(ID, GL_LINK_STATUS, &success);
 
-		if(!success) {
+		if (!success) {
 			glGetProgramInfoLog(ID, 512, NULL, infoLog);
 			std::cout << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n" << infoLog << std::endl;
 		}
@@ -156,7 +166,7 @@ namespace Engine {
 	void Shader::setInt(const std::string& name, int value) const {
 		glUniform1i(glGetUniformLocation(ID, name.c_str()), value);
 	}
-	
+
 	void Shader::setFloat(const std::string& name, float value) const {
 		glUniform1f(glGetUniformLocation(ID, name.c_str()), value);
 	}
@@ -180,104 +190,296 @@ namespace Engine {
 	void Shader::setSampler2D(const std::string& name, int textureUnit) const {
 		glUniform1i(glGetUniformLocation(ID, name.c_str()), textureUnit);
 	}
+
+	class Mesh {
+	public:
+		const std::vector<Vertex>& GetVertices() const { return vertices_; }
+		const std::vector<unsigned int>& GetIndices() const { return indices_; }
+		const std::vector<Texture>& GetTextures() const { return textures_; }
+
+		Mesh(std::vector<Vertex> vertices, std::vector<unsigned int> indices, std::vector<Texture> textures);
+		void Draw(Shader& shader);
+	private:
+		std::vector<Vertex> vertices_;
+		std::vector<unsigned int> indices_;
+		std::vector<Texture> textures_;
+
+		unsigned int vao_, vbo_, ebo_;
+		void SetUpMesh();
+	};
+
+	Mesh::Mesh(std::vector<Vertex> vertices, std::vector<unsigned int> indices, std::vector<Texture> textures) :
+		vertices_(std::move(vertices)),
+		indices_(std::move(indices)),
+		textures_(std::move(textures))
+	{
+		SetUpMesh();
+	}
+
+	void Mesh::Draw(Shader& shader) {
+		// LernOpenGLの手法に従い、シェーダーに特定の命名規則があるものとして設定します
+		unsigned int diffuse_nr = 1;
+		unsigned int specular_nr = 1;
+		for(unsigned int i = 0; i < textures_.size(); i++) {
+			glActiveTexture(GL_TEXTURE0 + i);
+			std::string number;
+			std::string name = textures_[i].type;
+			if(name == "texture_diffuse")
+				number = std::to_string(diffuse_nr++);
+			else if(name == "texture_specular")
+				number = std::to_string(specular_nr++);
+
+			shader.setSampler2D((name + number).c_str(), i);
+			glBindTexture(GL_TEXTURE_2D, textures_[i].id);
+		}
+		glActiveTexture(GL_TEXTURE0);
+
+		glBindVertexArray(vao_);
+		glDrawElements(GL_TRIANGLES, indices_.size(), GL_UNSIGNED_INT, 0);
+		glBindVertexArray(0);
+	}
+
+	void Mesh::SetUpMesh() {
+		// buffer/array objectsの作成
+		glGenVertexArrays(1, &vao_);
+		glGenBuffers(1, &vbo_);
+		glGenBuffers(1, &ebo_);
+
+		glBindVertexArray(vao_);
+		// 頂点バッファからデータをロードする
+		glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+
+		// 構造体のメモリ仕様（データが横並びになる）を利用し、配列のままデータを送信する
+		glBufferData(GL_ARRAY_BUFFER, vertices_.size() * sizeof(Vertex), vertices_.data(), GL_STATIC_DRAW);
+
+		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_);
+		glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices_.size() * sizeof(unsigned int), indices_.data(), GL_STATIC_DRAW);
+
+		// 頂点座標
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, position));
+		// 頂点の法線データ 
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal));
+		// UV座標データ	
+		glEnableVertexAttribArray(2);
+		glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, tex_coords));
+
+		glBindVertexArray(0);
+	}
+
+	class Model {
+	public:
+		Model(const char* path) {
+			LoadModel(path);
+		}
+		void Draw(Shader& shader);
+	private:
+		std::vector<Mesh> meshes;
+		std::string directory;
+
+		void LoadModel(std::string path);
+		void ProcessNode(aiNode* node, const aiScene* scene);
+		Mesh ProcessMesh(aiMesh* mesh, const aiScene* scene);
+		std::vector<Texture> LoadMaterialTextures(aiMaterial* mat, aiTextureType type, std::string type_name);
+	};
+
+	void Model::Draw(Shader& shader) {
+		for (unsigned int i = 0; i < meshes.size(); i++) {
+			meshes[i].Draw(shader);
+		}
+	}
+
+	void Model::LoadModel(std::string path) {
+		Assimp::Importer import;
+		const aiScene* scene = import.ReadFile(path, aiProcess_Triangulate | aiProcess_FlipUVs);
+
+		if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+			std::cout << "ERROR::ASSIMP::" << import.GetErrorString() << std::endl;
+			return;
+		}
+		directory = path.substr(0, path.find_last_of('/'));
+
+		ProcessNode(scene->mRootNode, scene);
+	}
+
+	void Model::ProcessNode(aiNode* node, const aiScene* scene) {
+		for (unsigned int i = 0; i < node->mNumMeshes; i++) {
+			aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
+			meshes.push_back(ProcessMesh(mesh, scene));
+		}
+		for (unsigned int i = 0; i < node->mNumChildren; i++) {
+			ProcessNode(node->mChildren[i], scene);
+		}
+	}
+
+	Mesh Model::ProcessMesh(aiMesh* mesh, const aiScene* scene) {
+		std::vector<Vertex> vertices;
+		std::vector<unsigned int> indices;
+		std::vector<Texture> textures;
+
+		for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
+			Vertex vertex;
+
+			glm::vec3 vector;
+			// 座標を取得	
+			vector.x = mesh->mVertices[i].x;
+			vector.y = mesh->mVertices[i].y;
+			vector.z = mesh->mVertices[i].z;
+			vertex.position = vector;
+
+			// 法線を取得
+			vector.x = mesh->mNormals[i].x;
+			vector.y = mesh->mNormals[i].y;
+			vector.z = mesh->mNormals[i].z;
+			vertex.normal = vector;
+
+			// UV座標を取得
+			if(mesh->mTextureCoords[0]) {
+				glm::vec2 vec;
+				vec.x = mesh->mTextureCoords[0][i].x;
+				vec.y = mesh->mTextureCoords[0][i].y;
+				vertex.tex_coords = vec;
+			}
+			else {
+				vertex.tex_coords = glm::vec2(0.0f, 0.0f);
+			}
+
+			vertices.push_back(vertex);
+		}
+
+		for (unsigned int i = 0; i < mesh->mNumFaces; i++) {
+			aiFace face = mesh->mFaces[i];
+			for (unsigned int j = 0; j < face.mNumIndices; j++) {
+				indices.push_back(face.mIndices[j]);
+			}
+		}
+
+		if (mesh->mMaterialIndex >= 0) {
+			aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
+			std::vector<Texture> diffuse_maps = LoadMaterialTextures(material, aiTextureType_DIFFUSE, "texture_diffuse");
+			textures.insert(textures.end(), diffuse_maps.begin(), diffuse_maps.end());
+			std::vector<Texture> specular_maps = LoadMaterialTextures(material, aiTextureType_SPECULAR, "texture_specular");
+			textures.insert(textures.end(), specular_maps.begin(), specular_maps.end());
+		}
+
+		return Mesh(vertices, indices, textures);
+	}
+
+	std::vector<Texture> Model::LoadMaterialTextures(aiMaterial* mat, aiTextureType type, std::string type_name)
+	{
+		std::vector<Texture> textures;
+		for (unsigned int i = 0; i < mat->GetTextureCount(type); i++) {
+			aiString str;
+			mat->GetTexture(type, i, &str);
+
+			std::string filename = directory + '/'+std::string(str.C_Str());
+
+			Texture texture;
+			texture.id = Engine::AssetManager::LoadTexture(filename);
+			texture.type = type_name;
+			textures.push_back(texture);
+		}
+		return textures;
+	}
+
+	enum MoveDirection {
+		FORWARD,
+		BACKWARD,
+		LEFT,
+		RIGHT,
+		UP,
+		DOWN
+	};
+
+	class Camera {
+	public:
+		inline static Camera* current = nullptr;
+		inline static std::vector<Camera*> cameras = std::vector<Camera*>();
+
+		Engine::Transform transform;
+		float fov = 45.0f; // 視野角
+		bool for_debug = false; // デバッグ用カメラかどうか
+		float aspect_ratio = 16.0f / 9.0f; // アスペクト比
+		float near_plane = 0.1f; // 近平面距離
+		float far_plane = 100.0f; // 遠平面距離
+
+		Camera(bool for_debug = false) : transform(), for_debug(for_debug) {
+			if (current == nullptr) {
+				current = this;
+			}
+			cameras.push_back(this);
+		}
+
+		~Camera() {
+			auto it = std::find(cameras.begin(), cameras.end(), this);
+			if (it != cameras.end()) {
+				cameras.erase(it);
+			}
+			if (current == this) {
+				current = cameras.empty() ? nullptr : cameras.back();
+			}
+
+			if (cameras.empty())
+			{
+				current = nullptr;
+				cameras.clear();
+			}
+		}
+
+		void ProcessMovement(MoveDirection direction, float velocity, float deltaTime) {
+			velocity *= deltaTime; // カメラの移動速度
+
+			glm::vec3 forward = transform.GetForwardVector();
+			glm::vec3 right = transform.GetRightVector();
+			glm::vec3 up = transform.GetUpVector();
+
+			if (direction == FORWARD)
+				transform.position += forward * velocity;
+			if (direction == BACKWARD)
+				transform.position -= forward * velocity;
+			if (direction == RIGHT)
+				transform.position += right * velocity;
+			if (direction == LEFT)
+				transform.position -= right * velocity;
+			if (direction == UP)
+				transform.position += up * velocity;
+			if (direction == DOWN)
+				transform.position -= up * velocity;
+		}
+
+		void ProcessViewMovement(float xoffset, float yoffset) {
+			float sensitivity = 0.1f; // マウス感度
+			xoffset *= sensitivity;
+			yoffset *= sensitivity;
+			transform.rotation.y += glm::radians(xoffset);
+			transform.rotation.x += glm::radians(yoffset);
+			// 上下の回転を制限
+			if (transform.rotation.x > glm::radians(89.0f))
+				transform.rotation.x = glm::radians(89.0f);
+			if (transform.rotation.x < glm::radians(-89.0f))
+				transform.rotation.x = glm::radians(-89.0f);
+		}
+
+		void ProcessZoom(float yoffset) {
+			fov -= yoffset;
+			if (fov < 1.0f)
+				fov = 1.0f;
+			if (fov > 45.0f)
+				fov = 45.0f;
+		}
+
+		glm::highp_mat4 GetViewMatrix() const {
+			glm::vec3 forward = transform.GetForwardVector();
+			glm::vec3 up = transform.GetUpVector();
+			return glm::lookAt(transform.position, transform.position + glm::normalize(forward), up);
+		}
+
+		glm::highp_mat4 GetProjectionMatrix() const {
+			return glm::perspective(glm::radians(fov), aspect_ratio, near_plane, far_plane);
+		}
+	};
 }
-
-enum MoveDirection {
-	FORWARD,
-	BACKWARD,
-	LEFT,
-	RIGHT,
-	UP,
-	DOWN
-};
-
-class Camera {
-public:
-	inline static Camera* current = nullptr;
-	inline static std::vector<Camera*> cameras = std::vector<Camera*>();
-
-	Engine::Transform transform;
-	float fov = 45.0f; // 視野角
-	bool for_debug = false; // デバッグ用カメラかどうか
-	float aspect_ratio = 16.0f / 9.0f; // アスペクト比
-	float near_plane = 0.1f; // 近平面距離
-	float far_plane = 100.0f; // 遠平面距離
-	
-	Camera(bool for_debug = false) : transform(), for_debug(for_debug) {
-		if(current == nullptr) {
-			current = this;
-		}
-		cameras.push_back(this);
-	}
-
-	~Camera() {
-		auto it = std::find(cameras.begin(), cameras.end(), this);
-		if (it != cameras.end()) {
-			cameras.erase(it);
-		}
-		if (current == this) {
-			current = cameras.empty() ? nullptr : cameras.back();
-		}
-
-		if (cameras.empty())
-		{
-			current = nullptr;
-			cameras.clear();
-		}
-	}
-
-	void ProcessMovement(MoveDirection direction, float velocity, float deltaTime) {
-		velocity *= deltaTime; // カメラの移動速度
-
-		glm::vec3 forward = transform.GetForwardVector();
-		glm::vec3 right = transform.GetRightVector();
-		glm::vec3 up = transform.GetUpVector();
-
-		if (direction == FORWARD)
-			transform.position += forward * velocity;
-		if (direction == BACKWARD)
-			transform.position -= forward * velocity;
-		if (direction == RIGHT)
-			transform.position += right * velocity;
-		if (direction == LEFT)
-			transform.position -= right * velocity;
-		if (direction == UP)
-			transform.position += up * velocity;
-		if (direction == DOWN)
-			transform.position -= up * velocity;
-	}
-
-	void ProcessViewMovement(float xoffset, float yoffset) {
-		float sensitivity = 0.1f; // マウス感度
-		xoffset *= sensitivity;
-		yoffset *= sensitivity;
-		transform.rotation.y += glm::radians(xoffset);
-		transform.rotation.x += glm::radians(yoffset);
-		// 上下の回転を制限
-		if (transform.rotation.x > glm::radians(89.0f))
-			transform.rotation.x = glm::radians(89.0f);
-		if (transform.rotation.x < glm::radians(-89.0f))
-			transform.rotation.x = glm::radians(-89.0f);
-	}
-
-	void ProcessZoom(float yoffset) {
-		fov -= yoffset;
-		if (fov < 1.0f)
-			fov = 1.0f;
-		if (fov > 45.0f)
-			fov = 45.0f;
-	}
-
-	glm::highp_mat4 GetViewMatrix() const {
-		glm::vec3 forward = transform.GetForwardVector();
-		glm::vec3 up = transform.GetUpVector();
-		return glm::lookAt(transform.position, transform.position + glm::normalize(forward), up);
-	}
-
-	glm::highp_mat4 GetProjectionMatrix() const {
-		return glm::perspective(glm::radians(fov), aspect_ratio, near_plane, far_plane);
-	}
-};
 
 // 三角形の頂点座標
 inline float triangle_vertex[9] = {
@@ -358,7 +560,7 @@ int main(int argc, char* argv[]) {
 	float playerSize = 50.0f;
 	float cameraSpeed = 2.5f;
 
-	std::unique_ptr<Camera> camera = std::make_unique<Camera>(true); // デバッグ用カメラを作成
+	std::unique_ptr<Engine::Camera> camera = std::make_unique<Engine::Camera>(true); // デバッグ用カメラを作成
 
 	glm::vec3 cameraPos(0.0f, 0.0f, 3.0f);
 	glm::vec3 cameraFront(0.0f, 0.0f, -1.0f);
@@ -435,6 +637,8 @@ int main(int argc, char* argv[]) {
 
 #pragma endregion
 
+	std::unique_ptr<Engine::Model> airplane = std::make_unique<Engine::Model>(Engine::Model("assets/model/airplane/airplane.obj"));
+
 	SDL_SetRelativeMouseMode(SDL_TRUE);
 			
 	// 2. メインゲームループ
@@ -447,19 +651,19 @@ int main(int argc, char* argv[]) {
 		float cameraSpeedDelta = cameraSpeed * deltaTime;
 		if (Engine::Input::GetKey(SDL_SCANCODE_W)) {
 			// playerY -= moveDistance;
-			camera->ProcessMovement(MoveDirection::FORWARD, cameraSpeed, deltaTime);
+			camera->ProcessMovement(Engine::MoveDirection::FORWARD, cameraSpeed, deltaTime);
 		}
 		if (Engine::Input::GetKey(SDL_SCANCODE_S)) {
 			// playerY += moveDistance;
-			camera->ProcessMovement(MoveDirection::BACKWARD, cameraSpeed, deltaTime);
+			camera->ProcessMovement(Engine::MoveDirection::BACKWARD, cameraSpeed, deltaTime);
 		}
 		if (Engine::Input::GetKey(SDL_SCANCODE_A)) {
 			// playerX -= moveDistance;
-			camera->ProcessMovement(MoveDirection::LEFT, cameraSpeed, deltaTime);
+			camera->ProcessMovement(Engine::MoveDirection::LEFT, cameraSpeed, deltaTime);
 		}
 		if (Engine::Input::GetKey(SDL_SCANCODE_D)) {
 			// playerX += moveDistance;
-			camera->ProcessMovement(MoveDirection::RIGHT, cameraSpeed, deltaTime);
+			camera->ProcessMovement(Engine::MoveDirection::RIGHT, cameraSpeed, deltaTime);
 		}
 		if(Engine::Input::GetKey(SDL_SCANCODE_ESCAPE)) {
 			SDL_SetRelativeMouseMode(SDL_FALSE);
@@ -528,7 +732,10 @@ int main(int argc, char* argv[]) {
 		glBindTexture(GL_TEXTURE_2D, texture);
 		glBindVertexArray(cubeVAO);
 		glDrawArrays(GL_TRIANGLES, 0, 36);
-	
+
+		// 自機の描画
+		airplane->Draw(*shaderProgram);
+
 		// ImGui フレーム開始
 		Engine::BeginImGui();
 
@@ -545,7 +752,9 @@ int main(int argc, char* argv[]) {
 
 		if (ImGui::Begin("Template Controller & Debug")) {
 			ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "[Controls]");
-			ImGui::BulletText("W / A / S / D : Move Square");
+			ImGui::BulletText("W / A / S / D : Move Camera");
+			ImGui::BulletText("Mouse Drag    : Move Camera View");
+			ImGui::BulletText("Mouse Wheel   : Zoom Camera");
 
 			ImGui::Separator();
 			ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "[Performance]");
@@ -555,12 +764,10 @@ int main(int argc, char* argv[]) {
 
 			ImGui::Separator();
 			ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "[Player Info]");
-			ImGui::Text("Position: (%.1f, %.1f)", playerX, playerY);
-			ImGui::SliderFloat("Speed", &playerSpeed, 100.0f, 1000.0f);
+			ImGui::Text("Position: (%.1f, %.1f, %1f)", camera->transform.position.x, camera->transform.position.y, camera->transform.position.z);
 
 			if (ImGui::Button("Reset Position")) {
-				playerX = 100.0f;
-				playerY = 100.0f;
+				camera->transform.position = glm::vec3(0.0f, 0.0f, 0.0f);
 			}
 		}
 		ImGui::End();
