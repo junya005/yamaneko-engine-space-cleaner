@@ -12,6 +12,8 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <random>
+#include <cmath>
 
 namespace Engine {
 	struct Vertex {
@@ -428,6 +430,8 @@ namespace Engine {
 		}
 
 		void ProcessMovement(MoveDirection direction, float velocity, float deltaTime) {
+			if (!for_debug) return;
+
 			velocity *= deltaTime; // カメラの移動速度
 
 			glm::vec3 forward = transform.GetForwardVector();
@@ -449,6 +453,8 @@ namespace Engine {
 		}
 
 		void ProcessViewMovement(float xoffset, float yoffset) {
+			if (!for_debug) return;
+
 			float sensitivity = 0.1f; // マウス感度
 			xoffset *= sensitivity;
 			yoffset *= sensitivity;
@@ -462,6 +468,8 @@ namespace Engine {
 		}
 
 		void ProcessZoom(float yoffset) {
+			if (!for_debug) return;
+
 			fov -= yoffset;
 			if (fov < 1.0f)
 				fov = 1.0f;
@@ -479,6 +487,38 @@ namespace Engine {
 			return glm::perspective(glm::radians(fov), aspect_ratio, near_plane, far_plane);
 		}
 	};
+
+	static class Random {
+	public:
+		inline static void Initialize(int seed = -1){
+			if (seed == -1) {
+				engine = std::mt19937(rd_());
+				return;
+			}
+
+			engine = std::mt19937(seed);
+		}
+
+		inline static int Range(int a, int b) {
+			std::uniform_int_distribution<int> dist(a, b);
+			return dist(engine);
+		}
+
+		inline static float Range(float a, float b) {
+			std::uniform_real_distribution<float> dist(a, b);
+			return dist(engine);
+		}
+
+		inline static double Range(double a, double b) {
+			std::uniform_real_distribution<double> dist(a, b);
+			return dist(engine);
+		}
+
+	private:
+		inline static std::random_device rd_;
+		inline static std::mt19937 engine;
+	};
+
 }
 
 // 三角形の頂点座標
@@ -541,6 +581,93 @@ inline float cube_vertices[] = {
 	-0.5f,  0.5f, -0.5f,  0.0f, 1.0f
 };
 
+class GameObject {
+public:
+	Engine::Transform transform;
+	Engine::Model* model = nullptr;
+
+	bool is_active = true;
+
+	float radius = 1.0f;
+
+	std::string tag;
+
+	GameObject(std::string tag, Engine::Model* model) : tag(tag), model(model) {
+
+	}
+
+	virtual ~GameObject() = default;
+
+	virtual void Update(float delta_time) {}
+
+	virtual void Draw(Engine::Shader& shader) {
+		if (!is_active || !model) return;
+
+		shader.setMat4("model", transform.GetModelMatrix());
+		
+		if (model != NULL) {
+			model->Draw(shader);
+		}
+	}
+
+protected:
+
+};
+
+class Player : public GameObject {
+public:
+	float player_speed = 5.0f;
+
+	Player(std::string tag, Engine::Model* model) : GameObject(tag, model){}
+
+	void Update(float delta_time) override {
+		float move_distance = player_speed * delta_time;
+
+		if (Engine::Input::GetKey(SDL_SCANCODE_W)) {
+			transform.position.y += move_distance;
+		}
+		if (Engine::Input::GetKey(SDL_SCANCODE_S)) {
+			transform.position.y -= move_distance;
+		}
+		if (Engine::Input::GetKey(SDL_SCANCODE_A)) {
+			transform.position.x -= move_distance;
+		}
+		if (Engine::Input::GetKey(SDL_SCANCODE_D)) {
+			transform.position.x += move_distance;
+		}
+	}
+};
+
+class Debri : public GameObject {
+public:
+	float debri_speed = 5.0f;
+	
+	Debri(std::string tag, Engine::Model* model):GameObject(tag, model){
+		float randomX = Engine::Random::Range(-4.0f, 4.0f);
+		float randomY = Engine::Random::Range(-2.5f, 2.5f);
+
+		transform.position = glm::vec3(randomX, randomY, -20.0f);
+
+		radius = 1.25f;
+	}
+
+	void Update(float delta_time) override {
+		float move_distance = debri_speed * delta_time;
+
+		transform.position.z += move_distance;
+	}
+};
+
+inline bool CheckSphereCollision(const GameObject& a, const GameObject& b) {
+	glm::vec3 diff = b.transform.position - a.transform.position;
+
+	float dist_sq = glm::dot(diff, diff);
+	float radius_sum = a.radius + b.radius;
+
+	return dist_sq <= (radius_sum * radius_sum);
+}
+
+
 /// <summary>
 /// アプリケーションのエントリポイント
 /// </summary>
@@ -549,20 +676,24 @@ int main(int argc, char* argv[]) {
 	(void)argv;
 
 	// 1. エンジンの初期化
-	if (!Engine::Init("Template Game", 1280, 720)) {
+	if (!Engine::Init("Space Cleaner", 1280, 720)) {
 		return -1;
 	}
+
+	Engine::Random::Initialize();
 
 	// プレイヤーの変数（初期位置、速度、サイズ）
 	float playerX = 100.0f;
 	float playerY = 100.0f;
-	float playerSpeed = 300.0f;
+	float playerSpeed = 5.0f;
 	float playerSize = 50.0f;
 	float cameraSpeed = 2.5f;
 
-	std::unique_ptr<Engine::Camera> camera = std::make_unique<Engine::Camera>(true); // デバッグ用カメラを作成
+	std::unique_ptr<Engine::Camera> camera = std::make_unique<Engine::Camera>(false); // デバッグ用カメラを作成
+	camera->transform.position = glm::vec3(0.0f, 4.0f, 12.0f);
+	camera->transform.rotation = glm::vec3(-0.25f, 0.0f, 0.0f);
 
-	glm::vec3 cameraPos(0.0f, 0.0f, 3.0f);
+	glm::vec3 cameraPos(0.0f, 0.0f, 10.0f);
 	glm::vec3 cameraFront(0.0f, 0.0f, -1.0f);
 	glm::vec3 cameraUp(0.0f, 1.0f, 0.0f);
 	float yaw = -90.0f;
@@ -637,50 +768,158 @@ int main(int argc, char* argv[]) {
 
 #pragma endregion
 
-	std::unique_ptr<Engine::Model> airplane = std::make_unique<Engine::Model>(Engine::Model("assets/model/airplane/airplane.obj"));
+	std::vector<std::unique_ptr<GameObject>> game_objects;
 
-	SDL_SetRelativeMouseMode(SDL_TRUE);
+
+	// プレイヤーの自機モデル読み込み
+	std::unique_ptr<Engine::Model> airplane = std::make_unique<Engine::Model>(Engine::Model("assets/model/airplane/airplane.obj"));
+	auto player = std::make_unique<Player>("Player", airplane.get());
+	Player* airplane_ptr = player.get();
+	game_objects.push_back(std::move(player));
+
+	// 敵のモデル読み込み
+	std::unique_ptr<Engine::Model> debri = std::make_unique<Engine::Model>(Engine::Model("assets/model/debri/debri.obj"));
+	
+	float time_stamp = 0;
+	float debri_spawn_time_span = 1.5f;
+	float charge_power = 0.0f;
+	float charge_power_max = 100.0f;
+	float charge_speed = 30.0f;
+	float invinsible_time = 5.0f;
+	float invinsible_time_current = 0.0f;
+	int score = 0;
+	
+	bool is_invinsible = false;
+	bool is_game_over = false;
+
+	SDL_KeyCode keycodes[] = {SDLK_1, SDLK_2, SDLK_3, SDLK_4};
+	int current_keycode_index = Engine::Random::Range(0, 3);
+	SDL_KeyCode current_keycodes = keycodes[current_keycode_index];
+	int succes_count = 0;
+	int succes_count_max = 4;
+	
+	float ok_display_time = 0.5f;
+	float ok_display_time_current = ok_display_time;
+
+	// SDL_SetRelativeMouseMode(SDL_TRUE);
 			
 	// 2. メインゲームループ
 	while (Engine::ProcessEvents()) {
 		float deltaTime = Engine::Time::GetDeltaTime();
 
-		
-		// WASDキー入力によるプレイヤー移動
-		float moveDistance = playerSpeed * deltaTime;
-		float cameraSpeedDelta = cameraSpeed * deltaTime;
-		if (Engine::Input::GetKey(SDL_SCANCODE_W)) {
-			// playerY -= moveDistance;
-			camera->ProcessMovement(Engine::MoveDirection::FORWARD, cameraSpeed, deltaTime);
-		}
-		if (Engine::Input::GetKey(SDL_SCANCODE_S)) {
-			// playerY += moveDistance;
-			camera->ProcessMovement(Engine::MoveDirection::BACKWARD, cameraSpeed, deltaTime);
-		}
-		if (Engine::Input::GetKey(SDL_SCANCODE_A)) {
-			// playerX -= moveDistance;
-			camera->ProcessMovement(Engine::MoveDirection::LEFT, cameraSpeed, deltaTime);
-		}
-		if (Engine::Input::GetKey(SDL_SCANCODE_D)) {
-			// playerX += moveDistance;
-			camera->ProcessMovement(Engine::MoveDirection::RIGHT, cameraSpeed, deltaTime);
-		}
-		if(Engine::Input::GetKey(SDL_SCANCODE_ESCAPE)) {
-			SDL_SetRelativeMouseMode(SDL_FALSE);
-		}
+		if (!is_game_over)
+		{
+			if (Engine::Input::GetKeyDown(current_keycodes) && !is_invinsible) {
+				succes_count++;
+				current_keycode_index = Engine::Random::Range(0, 3);
+				current_keycodes = keycodes[current_keycode_index];
+				ok_display_time_current = 0.0f;
 
-		// マウスの動きによるカメラの向き変更
-		glm::vec2 mouseMotion = Engine::GetMouseMotion();
-		camera->ProcessViewMovement(mouseMotion.x, mouseMotion.y);
+				if (succes_count == succes_count_max) {
+					is_invinsible = true;
+					invinsible_time_current = invinsible_time;
+					succes_count = 0;
+				}
+			}
 
-		// マウスホイールによるカメラのズーム
-		float mouseWheel = Engine::Input::GetMouseWheel();
-		camera->ProcessZoom(mouseWheel);
+			if (ok_display_time_current <= ok_display_time) {
+				ok_display_time_current+=deltaTime;
+			}
 
-		// 画面外への飛び出し防止（クランプ処理）
-		if (screenWidth > 0 && screenHeight > 0) {
-			playerX = std::clamp(playerX, 0.0f, static_cast<float>(screenWidth) - playerSize);
-			playerY = std::clamp(playerY, 0.0f, static_cast<float>(screenHeight) - playerSize);
+			/*
+			if (charge_power < charge_power_max && !is_invinsible) {
+				charge_power += deltaTime * charge_speed;
+			}
+			else {
+				charge_power == charge_power_max;
+
+				if (Engine::Input::GetKeyDown(SDLK_LSHIFT)) {
+					is_invinsible = true;
+					invinsible_time_current = invinsible_time;
+					charge_power = 0.0f;
+				}
+			}
+			*/
+
+			if (is_invinsible) {
+				invinsible_time_current -= deltaTime;
+
+				if (invinsible_time_current < 0) {
+					is_invinsible = false;
+				}
+			}
+
+			if (time_stamp <= Engine::Time::GetTotalTime()) {
+				game_objects.push_back(std::make_unique<Debri>("Debri", debri.get()));
+				time_stamp += debri_spawn_time_span;
+			}
+
+			std::erase_if(game_objects, [](const std::unique_ptr<GameObject>& go) {
+				return go->tag == "Debri" && (go->transform.position.z > 5.0f || go->is_active == false);
+				});
+
+			for (auto& go : game_objects) {
+				go->Update(deltaTime);
+
+				if (go->tag == "Debri") {
+					if (CheckSphereCollision(*airplane_ptr, *go)) {
+						if (!is_invinsible) {
+							is_game_over = true;
+							go->is_active = false;
+						}
+						else {
+							score++;
+							go->is_active = false;
+						}
+					}
+				}
+			}
+
+			// WASDキー入力によるプレイヤー移動
+			/*
+			float moveDistance = playerSpeed * deltaTime;
+			float cameraSpeedDelta = cameraSpeed * deltaTime;
+			if (Engine::Input::GetKey(SDL_SCANCODE_W)) {
+				// playerY -= moveDistance;
+				// camera->ProcessMovement(Engine::MoveDirection::FORWARD, cameraSpeed, deltaTime);
+				player->transform.position.y += moveDistance;
+			}
+			if (Engine::Input::GetKey(SDL_SCANCODE_S)) {
+				// playerY += moveDistance;
+				// camera->ProcessMovement(Engine::MoveDirection::BACKWARD, cameraSpeed, deltaTime);
+				player->transform.position.y -= moveDistance;
+			}
+			if (Engine::Input::GetKey(SDL_SCANCODE_A)) {
+				// playerX -= moveDistance;
+				// camera->ProcessMovement(Engine::MoveDirection::LEFT, cameraSpeed, deltaTime);
+				player->transform.position.x -= moveDistance;
+			}
+			if (Engine::Input::GetKey(SDL_SCANCODE_D)) {
+				// playerX += moveDistance;
+				// camera->ProcessMovement(Engine::MoveDirection::RIGHT, cameraSpeed, deltaTime);
+				player->transform.position.x += moveDistance;
+			}
+			if(Engine::Input::GetKey(SDL_SCANCODE_ESCAPE)) {
+				SDL_SetRelativeMouseMode(SDL_FALSE);
+			}
+			*/
+
+			// マウスの動きによるカメラの向き変更
+			glm::vec2 mouseMotion = Engine::GetMouseMotion();
+			camera->ProcessViewMovement(mouseMotion.x, mouseMotion.y);
+
+			// マウスホイールによるカメラのズーム
+			float mouseWheel = Engine::Input::GetMouseWheel();
+			camera->ProcessZoom(mouseWheel);
+
+			// 画面外への飛び出し防止（クランプ処理）
+			if (screenWidth > 0 && screenHeight > 0) {
+				// playerX = std::clamp(playerX, 0.0f, static_cast<float>(screenWidth) - playerSize);
+				// playerY = std::clamp(playerY, 0.0f, static_cast<float>(screenHeight) - playerSize);
+
+				airplane_ptr->transform.position.x = std::clamp(airplane_ptr->transform.position.x, -4.0f, 4.0f);
+				airplane_ptr->transform.position.y = std::clamp(airplane_ptr->transform.position.y, -2.5f, 2.5f);
+			}
 		}
 
 		// vectorの変換テスト
@@ -691,6 +930,10 @@ int main(int argc, char* argv[]) {
 		trans = glm::scale(trans, glm::vec3(0.5f, 0.5f, 0.5f));
 		vec = trans * vec;
 		*/
+
+		// -----------------------------------------------------------------------------------------
+		// 描画
+		// -----------------------------------------------------------------------------------------
 
 		// モデルマトリックスの作成
 		glm::mat4 model = glm::mat4(1.0f);
@@ -728,48 +971,86 @@ int main(int argc, char* argv[]) {
 		// glDrawArrays(GL_TRIANGLES, 0, 3);
 
 		// 立方体の描画
+		/*
 		glActiveTexture(GL_TEXTURE0); // テクスチャユニット0をアクティブにする
 		glBindTexture(GL_TEXTURE_2D, texture);
 		glBindVertexArray(cubeVAO);
 		glDrawArrays(GL_TRIANGLES, 0, 36);
+		*/
 
-		// 自機の描画
-		airplane->Draw(*shaderProgram);
+		// ゲームオブジェクトの描画
+		for (auto& go : game_objects) {
+			go->Draw(*shaderProgram);
+		}
+
+		// 背景や枠線をすべて透明・無効化するフラグを設定
+		ImGuiWindowFlags canvasFlags = ImGuiWindowFlags_NoTitleBar     // タイトルバーなし
+			| ImGuiWindowFlags_NoResize       // サイズ変更不可
+			| ImGuiWindowFlags_NoMove         // 移動不可
+			| ImGuiWindowFlags_NoScrollbar    // スクロールバーなし
+			| ImGuiWindowFlags_NoBackground   // 背景を完全に透明化
+			| ImGuiWindowFlags_NoCollapse     // 折りたたみ不可
+			| ImGuiWindowFlags_NoNav;         // キーボード・ゲームパッドナビ無効化（必要に応じて）
 
 		// ImGui フレーム開始
 		Engine::BeginImGui();
 
 		// プレイヤー四角形の描画（ImGui BackgroundDrawList）
+		/*
 		ImDrawList* drawList = ImGui::GetBackgroundDrawList();
 		ImVec2 pMin(playerX, playerY);
 		ImVec2 pMax(playerX + playerSize, playerY + playerSize);
 		drawList->AddRectFilled(pMin, pMax, IM_COL32(255, 255, 255, 255));
 		drawList->AddRect(pMin, pMax, IM_COL32(100, 200, 255, 255), 0.0f, 0, 2.0f);
+		*/
 
-		// デバッグ・操作情報ウィンドウの描画
-		ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_Once);
-		ImGui::SetNextWindowSize(ImVec2(320.0f, 220.0f), ImGuiCond_Once);
+		// 画面のサイズ（解像度）を取得する
+		ImGuiIO& io = ImGui::GetIO();
+		ImVec2 screenSize = io.DisplaySize;
 
-		if (ImGui::Begin("Template Controller & Debug")) {
-			ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "[Controls]");
-			ImGui::BulletText("W / A / S / D : Move Camera");
-			ImGui::BulletText("Mouse Drag    : Move Camera View");
-			ImGui::BulletText("Mouse Wheel   : Zoom Camera");
+		// ウィンドウの位置を左上に、サイズを画面全体に強制固定する
+		ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+		ImGui::SetNextWindowSize(screenSize, ImGuiCond_Always);
 
-			ImGui::Separator();
-			ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "[Performance]");
-			ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-			ImGui::Text("DeltaTime: %.4f s", Engine::Time::GetDeltaTime());
-			ImGui::Text("TotalTime: %.1f s", Engine::Time::GetTotalTime());
+		if (ImGui::Begin("Template Controller & Debug", nullptr, canvasFlags)) {
+			ImGui::SetWindowFontScale(5.0f);
+			
+			if (is_game_over){
+				ImVec2 font_size = ImGui::CalcTextSize("Game Over");
+				ImGui::SetCursorPos(
+					ImVec2(
+						(float)Engine::Window::Width()*0.5f - font_size.x*0.5f,
+						(float)Engine::Window::Height()*0.5f - font_size.y*0.5f
+					)
+				);
+				ImGui::Text("Game Over\nScore: %d", score);
+			}
+			else {
+				ImGui::SetCursorPos(ImVec2(20.0f,20.0f));
+				ImGui::Text("Score: %d", score);
+				ImGui::SetCursorPos(ImVec2(20.0f, 80.0f));
+				ImGui::Text("Charge Power: %d", static_cast<int>(charge_power));
+				
+				if (is_invinsible) {
+					ImGui::SetCursorPos(ImVec2(20.0f, 140.0f));
+					ImGui::Text("Invinsible Time: %d", static_cast<int>(invinsible_time_current));
+				}
+				else {
+					ImGui::SetCursorPos(ImVec2((float)Engine::Window::Width() * 0.5f, 600.0f));
+					ImGui::Text("Next Key: %d", current_keycode_index + 1);
+				}
 
-			ImGui::Separator();
-			ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "[Player Info]");
-			ImGui::Text("Position: (%.1f, %.1f, %1f)", camera->transform.position.x, camera->transform.position.y, camera->transform.position.z);
+				if (ok_display_time_current < ok_display_time) {
+					ImGui::SetCursorPos(ImVec2(
+						(float)Engine::Window::Width() * 0.5f, 
+						(float)Engine::Window::Height()*0.5f
+					));
+					ImGui::Text("OK", current_keycode_index + 1);
+				}
 
-			if (ImGui::Button("Reset Position")) {
-				camera->transform.position = glm::vec3(0.0f, 0.0f, 0.0f);
 			}
 		}
+
 		ImGui::End();
 
 		// ImGui 描画発行
