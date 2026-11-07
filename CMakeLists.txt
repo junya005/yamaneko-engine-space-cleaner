@@ -33,6 +33,7 @@ add_subdirectory(src)
 
 # ターゲットにライブラリをリンク
 target_link_libraries(${PROJECT_NAME} PRIVATE
+    yamaneko_engine
     SDL2::SDL2
     SDL2_image::SDL2_image
     SDL2_ttf::SDL2_ttf
